@@ -61,8 +61,6 @@ mod generated {
     #![allow(unused_imports)]
     #![allow(non_snake_case)]
 
-    use crate::interrupt;
-
     include!(concat!(env!("OUT_DIR"), "/generated.rs"));
 }
 pub use embassy_macros::interrupt;
@@ -88,6 +86,7 @@ pub fn init(config: Config) -> Peripherals {
     let p = Peripherals::take();
 
     unsafe {
+        /* TODO(macrotables)
         if config.enable_debug_during_sleep {
             crate::pac::DBGMCU.cr().modify(|cr| {
                 crate::pac::dbgmcu! {
@@ -97,6 +96,7 @@ pub fn init(config: Config) -> Peripherals {
                 }
             });
         }
+        */
 
         gpio::init();
         dma::init();

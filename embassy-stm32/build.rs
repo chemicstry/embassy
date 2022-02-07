@@ -1,8 +1,9 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::env;
 use std::fmt::Write;
 use std::fs;
 use std::path::PathBuf;
+use stm32_metapac::metadata::METADATA;
 
 fn main() {
     let chip_name = match env::vars()
@@ -18,67 +19,50 @@ fn main() {
     .unwrap()
     .to_ascii_lowercase();
 
-    struct Peripheral {
-        kind: String,
-        name: String,
-        version: String,
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            println!("cargo:rustc-cfg={}", r.kind);
+            println!("cargo:rustc-cfg={}_{}", r.kind, r.version);
+        }
     }
-
-    let mut peripheral_version_mapping = HashMap::<String, String>::new();
-    stm32_metapac::peripheral_versions!(
-        ($peri:ident, $version:ident) => {
-            peripheral_version_mapping.insert(stringify!($peri).to_string(), stringify!($version).to_string());
-            println!("cargo:rustc-cfg={}", stringify!($peri));
-            println!("cargo:rustc-cfg={}_{}", stringify!($peri), stringify!($version));
-        };
-    );
-
-    let mut peripherals: Vec<Peripheral> = Vec::new();
-    stm32_metapac::peripherals!(
-        ($kind:ident, $name:ident) => {
-            peripherals.push(Peripheral{
-                kind: stringify!($kind).to_string(),
-                name: stringify!($name).to_string(),
-                version: peripheral_version_mapping[&stringify!($kind).to_ascii_lowercase()].clone()
-            });
-        };
-    );
 
     // ========
     // Generate singletons
 
     let mut singletons: Vec<String> = Vec::new();
-    for p in peripherals {
-        match p.kind.as_str() {
-            // Generate singletons per pin, not per port
-            "gpio" => {
-                println!("{}", p.name);
-                let port_letter = p.name.strip_prefix("GPIO").unwrap();
-                for pin_num in 0..16 {
-                    singletons.push(format!("P{}{}", port_letter, pin_num));
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            match r.kind {
+                // Generate singletons per pin, not per port
+                "gpio" => {
+                    println!("{}", p.name);
+                    let port_letter = p.name.strip_prefix("GPIO").unwrap();
+                    for pin_num in 0..16 {
+                        singletons.push(format!("P{}{}", port_letter, pin_num));
+                    }
                 }
-            }
 
-            // No singleton for these, the HAL handles them specially.
-            "exti" => {}
+                // No singleton for these, the HAL handles them specially.
+                "exti" => {}
 
-            // We *shouldn't* have singletons for these, but the HAL currently requires
-            // singletons, for using with RccPeripheral to enable/disable clocks to them.
-            "rcc" => {
-                if p.version == "h7" {
-                    singletons.push("MCO1".to_string());
-                    singletons.push("MCO2".to_string());
+                // We *shouldn't* have singletons for these, but the HAL currently requires
+                // singletons, for using with RccPeripheral to enable/disable clocks to them.
+                "rcc" => {
+                    if r.version == "h7" {
+                        singletons.push("MCO1".to_string());
+                        singletons.push("MCO2".to_string());
+                    }
+                    singletons.push(p.name.to_string());
                 }
-                singletons.push(p.name.clone());
-            }
-            //"dbgmcu" => {}
-            //"syscfg" => {}
-            //"dma" => {}
-            //"bdma" => {}
-            //"dmamux" => {}
+                //"dbgmcu" => {}
+                //"syscfg" => {}
+                //"dma" => {}
+                //"bdma" => {}
+                //"dmamux" => {}
 
-            // For other peripherals, one singleton per peri
-            _ => singletons.push(p.name.clone()),
+                // For other peripherals, one singleton per peri
+                _ => singletons.push(p.name.to_string()),
+            }
         }
     }
 
@@ -88,47 +72,121 @@ fn main() {
     }
 
     // One singleton per DMA channel
-    stm32_metapac::dma_channels! {
-        ($channel_peri:ident, $dma_peri:ident, $version:ident, $channel_num:expr, $ignore:tt) => {
-            singletons.push(stringify!($channel_peri).to_string());
-        };
+    for c in METADATA.dma_channels {
+        singletons.push(c.name.to_string());
     }
 
-    let mut generated = String::new();
+    let g = &mut String::new();
     write!(
-        &mut generated,
+        g,
         "embassy_hal_common::peripherals!({});\n",
-        singletons.join(",")
+        singletons.join(",\n")
     )
     .unwrap();
 
     // ========
-    // Generate DMA IRQs.
-    // This can't be done with macrotables alone because in many chips, one irq is shared between many
-    // channels, so we have to deduplicate them.
+    // Generate interrupt declarations
 
-    #[allow(unused_mut)]
-    let mut dma_irqs: Vec<String> = Vec::new();
-    #[allow(unused_mut)]
-    let mut bdma_irqs: Vec<String> = Vec::new();
+    write!(g, "pub mod interrupt {{").unwrap();
+    write!(g, "use crate::pac::Interrupt as InterruptEnum;").unwrap();
+    for irq in METADATA.interrupts {
+        write!(g, "embassy::interrupt::declare!({});", irq.name).unwrap();
+    }
+    write!(g, "}}").unwrap();
 
-    stm32_metapac::interrupts! {
-        ($peri:ident, dma, $block:ident, $signal_name:ident, $irq:ident) => {
-            dma_irqs.push(stringify!($irq).to_string());
-        };
-        ($peri:ident, bdma, $block:ident, $signal_name:ident, $irq:ident) => {
-            bdma_irqs.push(stringify!($irq).to_string());
-        };
+    // ========
+    // Generate RccPeripheral impls
+
+    for p in METADATA.peripherals {
+        if !singletons.contains(&p.name.to_string()) {
+            continue;
+        }
+
+        if let Some(rcc) = &p.rcc {
+            let en = rcc.enable.as_ref().unwrap();
+
+            let rst = match &rcc.reset {
+                Some(rst) => format!(
+                    "
+                        critical_section::with(|_| {{
+                            unsafe {{
+                                crate::pac::RCC.{rst_reg}().modify(|w| w.set_{rst_field}(true));
+                                crate::pac::RCC.{rst_reg}().modify(|w| w.set_{rst_field}(false));
+                            }}
+                        }})
+                    ",
+                    rst_reg = rst.register.to_ascii_lowercase(),
+                    rst_field = rst.field.to_ascii_lowercase(),
+                ),
+                None => String::new(),
+            };
+
+            write!(
+                g,
+                "
+                impl crate::rcc::sealed::RccPeripheral for peripherals::{p} {{
+                    fn frequency() -> crate::time::Hertz {{
+                        critical_section::with(|_| {{
+                            unsafe {{ crate::rcc::get_freqs().{clk} }}
+                        }})
+                    }}
+                    fn enable() {{
+                        critical_section::with(|_| {{
+                            unsafe {{
+                                crate::pac::RCC.{en_reg}().modify(|w| w.set_{en_field}(true));
+                            }}
+                        }})
+                    }}
+                    fn disable() {{
+                        critical_section::with(|_| {{
+                            unsafe {{
+                                crate::pac::RCC.{en_reg}().modify(|w| w.set_{en_field}(false));
+                            }}
+                        }})
+                    }}
+                    fn reset() {{
+                        {rst}
+                    }}
+                }}
+                
+                impl crate::rcc::RccPeripheral for peripherals::{p} {{}}
+                ",
+                p = p.name,
+                clk = rcc.clock.to_ascii_lowercase(),
+                en_reg = en.register.to_ascii_lowercase(),
+                en_field = en.field.to_ascii_lowercase(),
+            )
+            .unwrap();
+        }
     }
 
-    dma_irqs.sort();
-    dma_irqs.dedup();
-    bdma_irqs.sort();
-    bdma_irqs.dedup();
+    // ========
+    // Generate DMA IRQs.
+
+    let mut dma_irqs: HashSet<&str> = HashSet::new();
+    let mut bdma_irqs: HashSet<&str> = HashSet::new();
+
+    for p in METADATA.peripherals {
+        if let Some(r) = &p.registers {
+            match r.kind {
+                "dma" => {
+                    for irq in p.interrupts {
+                        dma_irqs.insert(irq.interrupt);
+                    }
+                }
+                "bdma" => {
+                    for irq in p.interrupts {
+                        bdma_irqs.insert(irq.interrupt);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 
     for irq in dma_irqs {
         write!(
-            &mut generated,
+            g,
             "#[crate::interrupt] unsafe fn {} () {{ crate::dma::dma::on_irq(); }}\n",
             irq
         )
@@ -137,7 +195,7 @@ fn main() {
 
     for irq in bdma_irqs {
         write!(
-            &mut generated,
+            g,
             "#[crate::interrupt] unsafe fn {} () {{ crate::dma::bdma::on_irq(); }}\n",
             irq
         )
@@ -149,7 +207,7 @@ fn main() {
 
     let out_dir = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let out_file = out_dir.join("generated.rs").to_string_lossy().to_string();
-    fs::write(out_file, &generated).unwrap();
+    fs::write(out_file, g).unwrap();
 
     // ========
     // Multicore
