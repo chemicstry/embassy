@@ -85,6 +85,23 @@ where
     }
 }
 
+impl<'a, 'bus, 'c, I, B, T, INT> WriteInterface<'a, 'bus, 'c, I, B, T, INT>
+where
+    I: Unpin,
+    B: UsbBus,
+    T: SerialState<'bus, 'c, B, I> + ClassSet<B>,
+    INT: USBInterrupt,
+{
+    pub fn dtr(&self) -> bool {
+        let mut mutex = self.inner.borrow_mut();
+        mutex.with(|state| {
+            let serial = state.classes.get_serial();
+            let serial = Pin::new(serial);
+            serial.dtr()
+        })
+    }
+}
+
 impl<'a, 'bus, 'c, I, B, T, INT> AsyncWrite for WriteInterface<'a, 'bus, 'c, I, B, T, INT>
 where
     I: Unpin,
@@ -286,6 +303,14 @@ impl<'bus, 'a, B: UsbBus> UsbSerial<'bus, 'a, B> {
             }
             self.write_state = WriteState::Idle;
         }
+    }
+
+    pub fn dtr(&self) -> bool {
+        self.inner.dtr()
+    }
+
+    pub fn rts(&self) -> bool {
+        self.inner.rts()
     }
 }
 
