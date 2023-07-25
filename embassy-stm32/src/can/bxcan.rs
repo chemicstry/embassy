@@ -446,8 +446,16 @@ impl<'c, 'd, T: Instance> CanRx<'c, 'd, T> {
     /// Attempts to read a can frame without blocking.
     ///
     /// Returns [Err(nb::Error::WouldBlock)] if there are no frames in the rx queue.
-    pub fn try_read(&mut self) -> nb::Result<Envelope, Infallible> {
-        T::state().rx_queue.try_recv().map_err(|_| nb::Error::WouldBlock)
+    pub fn try_read(&mut self) -> nb::Result<Envelope, BusError> {
+        if let Ok(envelope) = T::state().rx_queue.try_recv() {
+            return Ok(envelope);
+        }
+
+        if let Some(err) = self.curr_error() {
+            return Err(nb::Error::Other(err));
+        }
+
+        Err(nb::Error::WouldBlock)
     }
 
     /// Waits while receive queue is empty.
