@@ -186,56 +186,16 @@ impl<'d, T: Instance> Can<'d, T> {
 
     /// Queues the message to be sent but exerts backpressure
     pub async fn write(&mut self, frame: &Frame) -> bxcan::TransmitStatus {
-        poll_fn(|cx| {
-            T::state().tx_waker.register(cx.waker());
-            if let Ok(status) = self.can.borrow_mut().transmit(frame) {
-                return Poll::Ready(status);
-            }
-
-            Poll::Pending
-        })
-        .await
+        CanTx { can: &self.can }.write(frame).await
     }
 
     pub async fn flush(&self, mb: bxcan::Mailbox) {
-        poll_fn(|cx| {
-            T::state().tx_waker.register(cx.waker());
-            if T::regs().tsr().read().tme(mb.index()) {
-                return Poll::Ready(());
-            }
-
-            Poll::Pending
-        })
-        .await;
+        CanTx { can: &self.can }.flush(mb).await
     }
 
     /// Returns a tuple of the time the message was received and the message frame
     pub async fn read(&mut self) -> Result<Envelope, BusError> {
-        poll_fn(|cx| {
-            T::state().err_waker.register(cx.waker());
-            if let Poll::Ready(envelope) = T::state().rx_queue.recv().poll_unpin(cx) {
-                return Poll::Ready(Ok(envelope));
-            } else if let Some(err) = self.curr_error() {
-                return Poll::Ready(Err(err));
-            }
-
-            Poll::Pending
-        })
-        .await
-    }
-
-    fn curr_error(&self) -> Option<BusError> {
-        let err = { T::regs().esr().read() };
-        if err.boff() {
-            return Some(BusError::BusOff);
-        } else if err.epvf() {
-            return Some(BusError::BusPassive);
-        } else if err.ewgf() {
-            return Some(BusError::BusWarning);
-        } else if let Some(err) = err.lec().into_bus_err() {
-            return Some(err);
-        }
-        None
+        CanRx { can: &self.can }.read().await
     }
 
     unsafe fn receive_fifo(fifo: RxFifo) {
