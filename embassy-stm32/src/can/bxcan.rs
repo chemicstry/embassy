@@ -450,6 +450,18 @@ impl<'c, 'd, T: Instance> CanRx<'c, 'd, T> {
         T::state().rx_queue.try_recv().map_err(|_| nb::Error::WouldBlock)
     }
 
+    /// Waits while receive queue is empty.
+    pub async fn wait_not_empty(&mut self) {
+        poll_fn(|cx| {
+            if T::state().rx_queue.poll_ready_to_receive(cx) {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await
+    }
+
     fn curr_error(&self) -> Option<BusError> {
         let err = { T::regs().esr().read() };
         if err.boff() {
