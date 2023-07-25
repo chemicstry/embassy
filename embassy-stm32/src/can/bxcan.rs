@@ -1,4 +1,5 @@
 use core::cell::{RefCell, RefMut};
+use core::convert::Infallible;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
@@ -365,6 +366,13 @@ impl<'c, 'd, T: Instance> CanTx<'c, 'd, T> {
         .await
     }
 
+    /// Attempts to transmit a frame without blocking.
+    ///
+    /// Returns [Err(nb::Error::WouldBlock)] if all transmit mailboxes are full.
+    pub fn try_write(&mut self, frame: &Frame) -> nb::Result<bxcan::TransmitStatus, Infallible> {
+        self.can.borrow_mut().transmit(frame)
+    }
+
     /// Wait for a specific transmit mailbox to become empty
     pub async fn flush(&self, mb: bxcan::Mailbox) {
         poll_fn(|cx| {
@@ -433,6 +441,13 @@ impl<'c, 'd, T: Instance> CanRx<'c, 'd, T> {
             Poll::Pending
         })
         .await
+    }
+
+    /// Attempts to read a can frame without blocking.
+    ///
+    /// Returns [Err(nb::Error::WouldBlock)] if there are no frames in the rx queue.
+    pub fn try_read(&mut self) -> nb::Result<Envelope, Infallible> {
+        T::state().rx_queue.try_recv().map_err(|_| nb::Error::WouldBlock)
     }
 
     fn curr_error(&self) -> Option<BusError> {
