@@ -365,10 +365,47 @@ impl<'c, 'd, T: Instance> CanTx<'c, 'd, T> {
         .await
     }
 
+    /// Wait for a specific transmit mailbox to become empty
     pub async fn flush(&self, mb: bxcan::Mailbox) {
         poll_fn(|cx| {
             T::state().tx_waker.register(cx.waker());
             if T::regs().tsr().read().tme(mb.index()) {
+                return Poll::Ready(());
+            }
+
+            Poll::Pending
+        })
+        .await;
+    }
+
+    /// Waits until any of the transmit mailboxes become empty
+    pub async fn flush_any(&self) {
+        poll_fn(|cx| {
+            T::state().tx_waker.register(cx.waker());
+
+            let tsr = T::regs().tsr().read();
+            if tsr.tme(bxcan::Mailbox::Mailbox0.index())
+                || tsr.tme(bxcan::Mailbox::Mailbox1.index())
+                || tsr.tme(bxcan::Mailbox::Mailbox2.index())
+            {
+                return Poll::Ready(());
+            }
+
+            Poll::Pending
+        })
+        .await;
+    }
+
+    /// Waits until all of the transmit mailboxes become empty
+    pub async fn flush_all(&self) {
+        poll_fn(|cx| {
+            T::state().tx_waker.register(cx.waker());
+
+            let tsr = T::regs().tsr().read();
+            if tsr.tme(bxcan::Mailbox::Mailbox0.index())
+                && tsr.tme(bxcan::Mailbox::Mailbox1.index())
+                && tsr.tme(bxcan::Mailbox::Mailbox2.index())
+            {
                 return Poll::Ready(());
             }
 
