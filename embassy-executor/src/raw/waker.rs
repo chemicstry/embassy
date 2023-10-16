@@ -38,6 +38,8 @@ pub fn task_from_waker(waker: &Waker) -> TaskRef {
     // indeed the case in the current implementation.
     // TODO use waker_getters when stable. https://github.com/rust-lang/rust/issues/96992
     let hack: &WakerHack = unsafe { mem::transmute(waker) };
+
+    #[cfg(not(feature = "alloc"))]
     if hack.vtable != &VTABLE {
         panic!("Found waker not created by the Embassy executor. `embassy_time::Timer` only works with the Embassy executor.")
     }

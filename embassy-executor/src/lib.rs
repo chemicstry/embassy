@@ -7,6 +7,9 @@
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
 #[cfg(feature = "nightly")]
 pub use embassy_macros::task;
 

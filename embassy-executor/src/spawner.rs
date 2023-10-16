@@ -115,6 +115,14 @@ impl Spawner {
         }
     }
 
+    /// Spawn a task into an executor.
+    ///
+    /// You obtain the `token` by calling a task function (i.e. one marked with `#[embassy_executor::task]`).
+    #[cfg(feature = "alloc")]
+    pub fn spawn_alloc<F: futures_util::Future + 'static>(&self, fut: impl FnOnce() -> F) -> Result<(), SpawnError> {
+        self.spawn(raw::alloc_task::AllocTaskStorage::spawn(fut))
+    }
+
     // Used by the `embassy_macros::main!` macro to throw an error when spawn
     // fails. This is here to allow conditional use of `defmt::unwrap!`
     // without introducing a `defmt` feature in the `embassy_macros` package,

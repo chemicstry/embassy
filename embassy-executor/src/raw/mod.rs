@@ -7,6 +7,8 @@
 //! Using this module requires respecting subtle safety contracts. If you can, prefer using the safe
 //! [executor wrappers](crate::Executor) and the [`embassy_executor::task`](embassy_macros::task) macro, which are fully safe.
 
+#[cfg(feature = "alloc")]
+pub(crate) mod alloc_task;
 mod run_queue;
 #[cfg(feature = "integrated-timers")]
 mod timer_queue;
