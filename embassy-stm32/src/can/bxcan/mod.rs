@@ -486,6 +486,13 @@ impl<'d, T: Instance, const TX_BUF_SIZE: usize, const RX_BUF_SIZE: usize> Buffer
         self.tx.write(frame).await
     }
 
+    /// Attempts to transmit a frame without blocking.
+    ///
+    /// Returns [Err(TryWriteError::Full)] if TX buffer is full.
+    pub fn try_write(&mut self, frame: &Frame) -> Result<(), TryWriteError> {
+        self.tx.try_write(frame)
+    }
+
     /// Returns a sender that can be used for sending CAN frames.
     pub fn writer(&self) -> BufferedCanSender {
         self.tx.writer()
@@ -669,6 +676,19 @@ impl<'d, T: Instance, const TX_BUF_SIZE: usize> BufferedCanTx<'d, T, TX_BUF_SIZE
     pub async fn write(&mut self, frame: &Frame) {
         self.tx_buf.send(*frame).await;
         T::TXInterrupt::pend(); // Wake for Tx
+    }
+
+    /// Attempts to transmit a frame without blocking.
+    ///
+    /// Returns [Err(TryWriteError::Full)] if TX buffer is full.
+    pub fn try_write(&mut self, frame: &Frame) -> Result<(), TryWriteError> {
+        match self.tx_buf.try_send(*frame) {
+            Ok(_) => {
+                T::TXInterrupt::pend(); // Wake for Tx
+                Ok(())
+            },
+            Err(_) => Err(TryWriteError::Full),
+        }
     }
 
     /// Returns a sender that can be used for sending CAN frames.
