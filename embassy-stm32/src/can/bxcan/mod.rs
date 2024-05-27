@@ -409,6 +409,78 @@ pub struct BufferedCan<'d, T: Instance, const TX_BUF_SIZE: usize, const RX_BUF_S
 }
 
 impl<'d, T: Instance, const TX_BUF_SIZE: usize, const RX_BUF_SIZE: usize> BufferedCan<'d, T, TX_BUF_SIZE, RX_BUF_SIZE> {
+    /// Set CAN bit rate.
+    pub fn set_bitrate(&mut self, bitrate: u32) {
+        let bit_timing = util::calc_can_timings(T::frequency(), bitrate).unwrap();
+        self.modify_config().set_bit_timing(bit_timing);
+    }
+
+    /// Configure bit timings and silent/loop-back mode.
+    ///
+    /// Calling this method will enter initialization mode. You must enable the peripheral
+    /// again afterwards with [`enable`](Self::enable).
+    pub fn modify_config(&mut self) -> CanConfig<'_, T> {
+        Registers(T::regs()).enter_init_mode();
+
+        CanConfig { can: PhantomData }
+    }
+
+    /// Enables the peripheral and synchronizes with the bus.
+    ///
+    /// This will wait for 11 consecutive recessive bits (bus idle state).
+    /// Contrary to enable method from bxcan library, this will not freeze the executor while waiting.
+    pub async fn enable(&mut self) {
+        while Registers(T::regs()).enable_non_blocking().is_err() {
+            // SCE interrupt is only generated for entering sleep mode, but not leaving.
+            // Yield to allow other tasks to execute while can bus is initializing.
+            embassy_futures::yield_now().await;
+        }
+    }
+
+    /// Enables or disables the peripheral from automatically wakeup when a SOF is detected on the bus
+    /// while the peripheral is in sleep mode
+    pub fn set_automatic_wakeup(&mut self, enabled: bool) {
+        Registers(T::regs()).set_automatic_wakeup(enabled);
+    }
+
+    /// Manually wake the peripheral from sleep mode.
+    ///
+    /// Waking the peripheral manually does not trigger a wake-up interrupt.
+    /// This will wait until the peripheral has acknowledged it has awoken from sleep mode
+    pub fn wakeup(&mut self) {
+        Registers(T::regs()).wakeup()
+    }
+
+    /// Check if the peripheral is currently in sleep mode
+    pub fn is_sleeping(&self) -> bool {
+        T::regs().msr().read().slak()
+    }
+
+    /// Put the peripheral in sleep mode
+    ///
+    /// When the peripherial is in sleep mode, messages can still be queued for transmission
+    /// and any previously received messages can be read from the receive FIFOs, however
+    /// no messages will be transmitted and no additional messages will be received.
+    ///
+    /// If the peripheral has automatic wakeup enabled, when a Start-of-Frame is detected
+    /// the peripheral will automatically wake and receive the incoming message.
+    pub async fn sleep(&mut self) {
+        T::regs().ier().modify(|i| i.set_slkie(true));
+        T::regs().mcr().modify(|m| m.set_sleep(true));
+
+        poll_fn(|cx| {
+            T::state().err_waker.register(cx.waker());
+            if self.is_sleeping() {
+                Poll::Ready(())
+            } else {
+                Poll::Pending
+            }
+        })
+        .await;
+
+        T::regs().ier().modify(|i| i.set_slkie(false));
+    }
+
     /// Async write frame to TX buffer.
     pub async fn write(&mut self, frame: &Frame) {
         self.tx.write(frame).await
@@ -439,6 +511,18 @@ impl<'d, T: Instance, const TX_BUF_SIZE: usize, const RX_BUF_SIZE: usize> Buffer
     /// Returns a receiver that can be used for receiving CAN frames. Note, each CAN frame will only be received by one receiver.
     pub fn reader(&self) -> BufferedCanReceiver {
         self.rx.reader()
+    }
+}
+
+impl<'d, T: FilterOwner, const TX_BUF_SIZE: usize, const RX_BUF_SIZE: usize>
+    BufferedCan<'d, T, TX_BUF_SIZE, RX_BUF_SIZE>
+{
+    /// Accesses the filter banks owned by this CAN peripheral.
+    ///
+    /// To modify filters of a slave peripheral, `modify_filters` has to be called on the master
+    /// peripheral instead.
+    pub fn modify_filters(&mut self) -> MasterFilters<'_, T> {
+        unsafe { MasterFilters::new(T::regs()) }
     }
 }
 
