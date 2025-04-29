@@ -1380,7 +1380,7 @@ impl<'d, T: Instance> Sdmmc<'d, T> {
                         Err(Error::Crc) => (),
                         Err(err) => return Err(err),
                     }
-                    let ocr: OCR<SD> = regs.respr(0).read().cardstatus().into();
+                    let ocr: OCR<SD> = regs.respr(2).read().cardstatus().into();
                     if !ocr.is_busy() {
                         // Power up done
                         break ocr;
@@ -1406,7 +1406,7 @@ impl<'d, T: Instance> Sdmmc<'d, T> {
                         Err(Error::Crc) => (),
                         Err(err) => return Err(err),
                     }
-                    let ocr: OCR<EMMC> = regs.respr(0).read().cardstatus().into();
+                    let ocr: OCR<EMMC> = regs.respr(2).read().cardstatus().into();
                     if !ocr.is_busy() {
                         // Power up done
                         break ocr;
