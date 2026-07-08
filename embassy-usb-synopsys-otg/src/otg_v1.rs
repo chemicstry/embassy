@@ -252,7 +252,13 @@ impl Otg {
     #[doc = "Device IN endpoint transmit FIFO size register"]
     #[inline(always)]
     pub const fn dieptxf(self, n: usize) -> Reg<regs::Fsiz, RW> {
-        core::assert!(n < 7usize);
+        // OTG_DIEPTXFx exists for x = 1..=8 (offset 0x104 + 0x04*(x-1)), so n
+        // (= x-1) goes up to 7. Chips with 9 total endpoints (e.g. STM32H7's
+        // OTG_HS) need all 8 registers; the previous `n < 7` bound rejected
+        // the 8th one even though it's a valid, addressable register — see
+        // STM32H723/733 RM0468 section 62.14.19 "OTG device IN endpoint
+        // transmit FIFO x size register".
+        core::assert!(n < 8usize);
         unsafe { Reg::from_ptr(self.ptr.add(0x0104usize + n * 4usize) as _) }
     }
     #[doc = "Host configuration register"]
